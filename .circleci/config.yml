@@ -1,0 +1,523 @@
+# Python CircleCI 2.1 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-python/ for more details
+#
+version: 2.1
+
+commands:
+  pre-cache:
+    steps:
+      - run: &get_make_checksum
+          name: Get 'make' checksum
+          command: |
+            echo 'export SUDO="sudo"' >> $BASH_ENV
+            cp -f /usr/bin/make make.bin
+            md5sum make.bin > ~/make.md5
+
+      - run: &get_dot_checksum
+          name: Get 'dot' checksum
+          command: |
+            if [ -f /usr/bin/dot ] ; then
+              cp -f /usr/bin/dot dot.bin
+              md5sum dot.bin > ~/dot.md5
+            else
+              touch dot.bin
+              md5sum dot.bin > ~/dot.md5
+              rm -f dot.bin
+            fi
+
+      - run: &create_python_cache_key
+          # Combine hashes of the Python interpreter and Pipfile plus today's
+          # date into a file whose checksum will key the Python environ. cache.
+          name: Create Python environment cache key
+          command: |
+            md5sum $(which python) > ~/python_version.md5
+            md5sum lib/Pipfile >> ~/python_version.md5
+            md5sum lib/test-requirements.txt >> ~/python_version.md5
+            date +%F >> ~/python_version.md5
+
+      - run: &create_yarn_cache_key
+          name: Create Yarn cache key
+          command: |
+            md5sum frontend/yarn.lock > ~/yarn.lock.md5
+
+  restore-from-cache:
+    steps:
+      - restore_cache: &restore_virtualenv
+          name: Restore virtualenv from cache
+          keys:
+            - v12-python-venv-{{ checksum "~/python_version.md5" }}
+
+      - restore_cache: &restore_nvm
+          name: Restore nvm and node_modules from cache
+          keys:
+            - v12-nvm_node_modules-{{ checksum "~/yarn.lock.md5" }}
+
+      - restore_cache: &restore_make
+          name: Restore make from cache
+          keys:
+            - v12_make.bin-{{ checksum "~/make.md5" }}
+
+      - restore_cache: &restore_dot
+          name: Restore dot from cache
+          keys:
+            - v12_dot.bin-{{ checksum "~/dot.md5" }}
+
+  pre-make:
+    steps:
+      - run: &install_make
+          name: Install make
+          command: |
+            if [ -s make.bin ] ; then
+              echo "make.bin exists; not installing"
+            else
+              echo "/usr/bin/make doesn't exist; installing"
+              apt-get update -y
+              apt-get install -y make
+              cp -f /usr/bin/make make.bin
+            fi
+            ${SUDO} cp -f make.bin /usr/bin/make
+
+      - run: &install_dot
+          name: Install dot
+          command: |
+            if [ -s dot.bin ] ; then
+              echo "dot.bin exists and is non zero"
+            else
+              echo "/usr/bin/dot doesn't exist, installing"
+              ${SUDO} apt-get update -y
+              ${SUDO} apt-get install -y graphviz
+              cp -f /usr/bin/dot dot.bin
+            fi
+            ${SUDO} cp -f dot.bin /usr/bin/dot
+
+  make-init:
+    steps:
+      - run: &install_nodejs
+          name: Install NVM, Node.js, and Yarn
+          command: |
+            if [ ! -d ~/.nvm ] ; then
+              # install nodejs via nvm
+              curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.35.2/install.sh | bash
+              source "$HOME/.nvm/nvm.sh"
+              nvm install --lts=dubnium
+              # install yarn
+              npm install -g yarn
+            fi
+            if [ ! -d frontend/node_modules ] ; then
+              source "$HOME/.nvm/nvm.sh"
+            fi
+            make react-init scssvars
+            echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
+            echo 'source "$NVM_DIR/nvm.sh"' >> $BASH_ENV
+
+      - run:
+          name: Install pyodbc dependencies
+          command: |
+            ${SUDO} apt-get install -y unixodbc-dev
+
+      - run: &activate_virtualenv
+          name: Run make pipenv-lock and create virtualenv
+          command: |
+            echo 'Checking for virtualenv'
+            if [ ! -d venv ] ; then
+              python -m venv venv
+              source venv/bin/activate
+              make setup
+              pip install --upgrade pip
+              make pipenv-install
+              deactivate
+            else
+              echo 'Virtualenv already exists, not creating'
+            fi
+            echo 'source venv/bin/activate' >> $BASH_ENV
+
+      - run: &generate_protobufs
+          name: Generate protobufs
+          command: |
+            # There's a chance this file could be a cached version when
+            # the protobuf cache is restored, so checkout from github to
+            # make sure.
+            git checkout -- lib/streamlit/proto/__init__.py
+            if [ ! -e frontend/src/autogen/proto.js -o ! -e lib/streamlit/proto/DataFrame_pb2.py ] ; then
+              # install protobuf v3
+              ${SUDO} apt-get update -y
+              ${SUDO} apt-get install -y gnupg
+              echo "deb http://ppa.launchpad.net/maarten-fonville/protobuf/ubuntu trusty main" | ${SUDO} tee /etc/apt/sources.list.d/protobuf.list
+              ${SUDO} apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4DEA8909DC6A13A3
+              ${SUDO} apt-get update -y
+              ${SUDO} apt-get install -y protobuf-compiler
+              make protobuf
+            fi
+
+workflows:
+  circleci:
+    jobs:
+      - python-3-6: # Oldest supported Python minor version.
+          filters:
+            tags:
+              only: /^([0-9]+\.){3}dev[0-9]+/ # 0.56.1.dev20201129
+      - python-3-8: # Latest supported Python minor version.
+          filters:
+            tags:
+              only: /^([0-9]+\.){3}dev[0-9]+/
+      - cypress: # Non flaky Cypress tests
+          requires:
+            - python-3-8
+          filters:
+            tags:
+              only: /^([0-9]+\.){3}dev[0-9]+/
+      - nightly-release:
+          requires:
+            - python-3-6
+            - python-3-8
+            - cypress
+          filters:
+            tags:
+              only: /^([0-9]+\.){3}dev[0-9]+/
+            branches:
+              ignore: /.*/
+      - cypress-flaky-approval:
+          type: approval
+          requires:
+            - python-3-8
+      - cypress: # Flaky Cypress tests
+          name: cypress-flaky
+          flaky: true
+          requires:
+            - cypress-flaky-approval
+
+  create-nightly-tag:
+    triggers:
+      - schedule:
+          # Run job at 10.30pm PST or 11.30pm PDT
+          cron: "30 6 * * *"
+          filters:
+            branches:
+              only:
+                - develop
+    jobs:
+      - create-tag
+
+jobs:
+  python-3-8: &job-template
+    docker:
+      - image: circleci/python:3.8.1
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout:
+          name: Checkout Streamlit code
+
+      #################################################################
+      # Pre Cache Steps
+      #################################################################
+      - pre-cache
+
+      - run:
+          # There is no lock file for the protobufs so we run a checksum
+          # across all the protos along with Python and the protobuf compilers
+          # and save that to a file to use as cache key.
+          name: Checksum all protobufs
+          command: |
+            md5sum proto/streamlit/proto/*.proto > ~/protobuf.md5
+            md5sum $(which python) >> ~/protobuf.md5
+            md5sum $(which protoc) >> ~/protobuf.md5
+            md5sum $(which protoc-gen-mypy) >> ~/protobuf.md5
+
+      #################################################################
+      # Restore from cache
+      #################################################################
+      - restore-from-cache
+
+      - restore_cache:
+          name: Restore protobufs from cache
+          keys:
+            - v12-protobuf-{{ checksum "~/protobuf.md5" }}
+
+      #################################################################
+      # Pre Make commands
+      #################################################################
+      - pre-make
+
+      - save_cache:
+          name: Save make to cache
+          key: v12_make.bin-{{ checksum "~/make.md5" }}
+          paths:
+            - make.bin
+
+      - save_cache:
+          name: Save dot to cache
+          key: v12_dot.bin-{{ checksum "~/dot.md5" }}
+          paths:
+            - dot.bin
+
+      #################################################################
+      # Run 'make init'
+      #################################################################
+      - make-init
+
+      - run: &make_develop
+          name: Run make develop
+          command: |
+            make develop
+
+      #################################################################
+      # Run linters
+      #################################################################
+      - run:
+          name: Run linters
+          command: |
+            make jslint
+            make pylint
+
+      - store_test_results:
+          path: frontend/test-reports
+          when: always
+
+      #################################################################
+      # Run mypy. (Only executed in one job.)
+      #################################################################
+      - run:
+          name: Run mypy
+          command: |
+            if [ "${CIRCLE_JOB}" != "python-3-8" ] ; then
+              echo "Mypy is only run in python-3.8 job"
+            else
+              scripts/mypy --report
+            fi
+
+      - store_test_results:
+          path: lib/test-reports
+          when: always
+
+      #################################################################
+      # Run make pycoverage
+      #################################################################
+      - run:
+          name: Run python tests
+          command: |
+            make pycoverage
+
+      - store_test_results:
+          path: lib/test-reports
+          when: always
+
+      #################################################################
+      # Run integration tests
+      #################################################################
+      - run:
+          name: Run integration tests
+          command: |
+            make integration-tests
+
+      #################################################################
+      # Run frontend tests. (Only executed in one job.)
+      #################################################################
+      - run:
+          name: Run frontend tests
+          command: |
+            if [ "${CIRCLE_JOB}" != "python-3-8" ] ; then
+              echo "Frontend tests are only run in python-3.8 job"
+            else
+              make jstest
+            fi
+
+      #################################################################
+      # Save cache for python virtualenv, node_modules, protobuf
+      #################################################################
+      - save_cache:
+          name: Save virtualenv to cache
+          key: v12-python-venv-{{ checksum "~/python_version.md5" }}
+          paths:
+            - venv
+
+      - save_cache:
+          name: Save nvm and node_modules to cache
+          key: v12-nvm_node_modules-{{ checksum "~/yarn.lock.md5" }}
+          paths:
+            - ~/.nvm
+            - ~/.cache
+
+      - save_cache:
+          name: Save generated protobufs to cache
+          key: v12-protobuf-{{ checksum "~/protobuf.md5" }}
+          paths:
+            - frontend/src/autogen/proto.js
+            - lib/streamlit/proto
+
+  # The following inherits from python-3-8. In a few cases, steps are skipped
+  # based on the name of the current job (see, e.g., "Run frontend tests").
+  python-3-6:
+    <<: *job-template
+    docker:
+      - image: circleci/python:3.6.5
+
+  create-tag:
+    docker:
+      - image: circleci/python:3.8.1
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout:
+          name: Checkout Streamlit code
+
+      - pre-cache
+      - restore-from-cache
+      - pre-make
+      - make-init
+
+      - run: &make_scss_vars
+          name: Make SCSS vars
+          command: |
+            make scssvars
+
+      - run:
+          <<: *make_develop
+
+      - run:
+          name: Create tag
+          command: |
+            TAG="$(./scripts/pypi_nightly_create_tag.py)"
+
+            ./scripts/update_version.py $TAG
+            ./scripts/update_name.py streamlit-nightly
+
+            git config user.email "jonathan@streamlit.io"
+            git config user.name "CircleCI"
+
+            git add lib/setup.py
+            git add docs/troubleshooting/sanity-checks.md
+            git add frontend/package.json
+
+            git add lib/streamlit/__init__.py
+            git add lib/streamlit/version.py
+
+            git commit -m"Update version and project name in files"
+
+            git tag -a $TAG -m "Streamlit nightly $TAG"
+            git push origin $TAG
+
+  nightly-release:
+    docker:
+      - image: circleci/python:3.8.1
+
+    resource_class: medium+
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout:
+          name: Checkout Streamlit code
+
+      - pre-cache
+      - restore-from-cache
+      - pre-make
+      - make-init
+
+      - run:
+          <<: *make_scss_vars
+
+      - run:
+          name: verify git tag vs. version
+          command: |
+            cd lib
+            python setup.py verify
+
+      # Password added to circleci environment
+      # https://ui.circleci.com/settings/project/github/streamlit/streamlit/environment-variables
+      - run:
+          name: init .pypirc
+          command: |
+            cd lib
+            echo -e "[pypi]" >> ~/.pypirc
+            echo -e "username = streamlit" >> ~/.pypirc
+            echo -e "password = $PYPI_PASSWORD" >> ~/.pypirc
+
+      - run:
+          name: create packages
+          no_output_timeout: 2h
+          command: |
+            ${SUDO} apt-get install rsync
+            make frontend
+            make install
+            make wheel
+
+      - run:
+          name: upload to pypi
+          command: |
+            make distribute
+
+  cypress:
+    docker:
+      - image: circleci/python:3.7.4-stretch
+
+    working_directory: ~/repo
+
+    parameters:
+      flaky:
+        description: "Run flaky tests"
+        default: false
+        type: boolean
+
+    steps:
+      - checkout:
+          name: Checkout Streamlit code
+
+      # NOTE restore protobuf from cache wasn't
+      # working so generating protobufs instead.
+      - pre-cache
+      - restore-from-cache
+      - pre-make
+      - make-init
+
+      - run:
+          <<: *make_scss_vars
+
+      - run:
+          <<: *make_develop
+
+      - run:
+          name: Install Cypress dependencies
+          command: |
+            ${SUDO} apt-get install -y xvfb libgtk2.0-0 libnotify-dev libgconf-2-4 libnss3 libxss1 libasound2
+
+      - run:
+          name: Init credentials
+          command: |
+            mkdir ~/.streamlit
+            echo '[general]' >  ~/.streamlit/credentials.toml
+            echo 'email = "test@streamlit.io"' >> ~/.streamlit/credentials.toml
+
+      - when:
+          condition: << parameters.flaky >>
+          steps:
+            - run:
+                name: Cypress
+                command: |
+                  cd frontend
+                  yarn run cy:serve-and-run-all-flaky
+
+      - unless:
+          condition: << parameters.flaky >>
+          steps:
+            - run:
+                name: Cypress
+                command: |
+                  cd frontend
+                  yarn run cy:serve-and-run-all
+
+      - store_test_results: &store_results
+          path: frontend/test-reports
+          when: always
+
+      - store_artifacts: &store_report
+          path: frontend/mochawesome-report
+
+      - store_artifacts: &store_videos
+          path: frontend/cypress/videos
+
+      - store_artifacts: &store_snapshots
+          path: frontend/cypress/snapshots
