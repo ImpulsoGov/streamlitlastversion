@@ -1,0 +1,41 @@
+/**
+ * Copyright 2018-2020 Streamlit Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+*/
+
+syntax = "proto3";
+
+message NumberInput {
+  enum DataType {
+    // Does the input operate on ints or floats? This doesn't change how the
+    // data is stored, but the frontend needs to know for input parsing.
+    INT = 0;
+    FLOAT = 1;
+  }
+
+  string id = 1;
+  string label = 2;
+
+  string format = 8;
+  bool has_min = 11;
+  bool has_max = 12;
+
+  DataType data_type = 13;
+  double default = 14;
+  double step = 15;
+  double min = 16;
+  double max = 17;
+
+  reserved 3, 4, 5, 6, 7, 9, 10;
+}
