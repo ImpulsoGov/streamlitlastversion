@@ -239,7 +239,7 @@ def _global_development_mode():
     )
 
 
-@_create_option("global.logLevel")
+@_create_option("logger.level")
 def _global_log_level():
     """Level of logging: 'error', 'warning', 'info', or 'debug'.
 
@@ -784,7 +784,7 @@ def _set_option(key, value, where_defined):
     Parameters
     ----------
     key : str
-        The key of the option, like "global.logLevel".
+        The key of the option, like "logger.level".
     value
         The value of the option.
     where_defined : str

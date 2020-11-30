@@ -117,7 +117,7 @@ _is_running_with_streamlit = False
 
 
 def _set_log_level():
-    _logger.set_log_level(_config.get_option("global.logLevel").upper())
+    _logger.set_log_level(_config.get_option("logger.level").upper())
     _logger.init_tornado_logs()
 
 

@@ -275,7 +275,7 @@ class ConfigTest(unittest.TestCase):
                 "client.displayEnabled",
                 "global.developmentMode",
                 "global.disableWatchdogWarning",
-                "global.logLevel",
+                "logger.level",
                 "global.maxCachedMessageAge",
                 "global.minCachedMessageSize",
                 "global.metrics",
@@ -504,11 +504,11 @@ class ConfigTest(unittest.TestCase):
 
     def test_global_log_level_debug(self):
         config.set_option("global.developmentMode", True)
-        self.assertEqual("debug", config.get_option("global.logLevel"))
+        self.assertEqual("debug", config.get_option("logger.level"))
 
     def test_global_log_level(self):
         config.set_option("global.developmentMode", False)
-        self.assertEqual("info", config.get_option("global.logLevel"))
+        self.assertEqual("info", config.get_option("logger.level"))
 
 
 class ConfigLoadingTest(unittest.TestCase):
