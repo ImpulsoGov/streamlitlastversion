@@ -1,6 +1,6 @@
 # Welcome to Streamlit :wave:
 
-**MODIFIED BY THE IMPULSO TEAM**
+**MODIFICADO PELA IMPULSO GOV**
 
 The modification allows a folder called "resources" on the same path from where the script was executed, to serve as a static folder for the server. It is accessible through /resources
 
